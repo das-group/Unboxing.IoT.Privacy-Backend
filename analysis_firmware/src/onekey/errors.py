@@ -1,0 +1,40 @@
+import json
+
+
+class ClientError(Exception):
+    """Base class for all Client errors."""
+
+    def __init__(self, message: str | None = None):
+        super().__init__(message or self.MESSAGE)
+
+
+class NotLoggedIn(ClientError):
+    MESSAGE = (
+        "You are not logged in yet. \n"
+        "You have to call client.login(email, password) first or provide API token with use_token()."
+    )
+
+
+class TenantNotSelected(ClientError):
+    MESSAGE = (
+        "You have to select a Tenant (Environment) with client.use_tenant(tenant) first"
+        "or provide API token with use_token()."
+    )
+
+
+class InvalidCABundle(ClientError):
+    MESSAGE = "The CA bundle is invalid or doesn't exist."
+
+
+class InvalidAPIToken(ClientError):
+    MESSAGE = "The API Token is invalid."
+
+
+class QueryError(ClientError):
+    """raised when a GraphQL query returns errors."""
+
+    def __init__(self, errors_json: dict):
+        self.errors = errors_json
+
+    def __str__(self):
+        return json.dumps(self.errors, indent=4)

@@ -1,0 +1,247 @@
+services:
+  ## ----------- Gateway Service -----------
+
+  gateway:
+    build:
+      context: ./gateway/.
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      ORIGIN: ${ORIGIN}
+      USER_SERVICE: "users:4040"
+      DATA_SERVICE: "data:8080"
+      ANALYSIS_POLICY_SERVICE: "analysis_policy:8080"
+      ANALYSIS_NET_SERVICE: "analysis_net:8080"
+      ANALYSIS_FIRMWARE_SERVICE: "analysis_firmware:8080"
+    networks:
+      - frontend
+    depends_on:
+      users-mongodb:
+        condition: service_healthy
+      data-mongodb:
+        condition: service_healthy
+
+  ## ----------- User Service -----------
+
+  users:
+    build:
+      context: ./users/.
+    restart: unless-stopped
+    ports:
+      - "4040:4040"
+    environment:
+      ORIGIN: ${ORIGIN}
+      RP_ID: ${RP_ID}
+      RP_NAME: ${RP_NAME}
+      REDIS_HOST: "users-redis"
+      REDIS_PORT: 6379
+      MONGO_HOST: "users-mongodb"
+      MONGO_PORT: 27017
+      MONGO_USER: ${MONGO_USER}
+      MONGO_PASS: ${MONGO_PASS}
+      MONGO_DB: "userdb"
+      MONGO_COLLECTION: "users"
+    networks:
+      - frontend
+      - backend
+    depends_on:
+      users-redis:
+        condition: service_healthy
+      users-mongodb:
+        condition: service_healthy
+
+  users-redis:
+    image: "redis:8.4-alpine"
+    restart: unless-stopped
+    tmpfs:
+      - /data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  users-mongodb:
+    image: "mongo:8.2-noble"
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASS}
+      MONGO_INITDB_DATABASE: "userdb"
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --eval 'db.adminCommand({ ping: 1 }).ok' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    volumes:
+      - ./users/data/db:/data/db:rw
+      - users-mongo-config:/data/configdb:rw
+
+  ##  ----------- Data Service -----------
+
+  data:
+    build: ./data/.
+    restart: unless-stopped
+    ports:
+      - "4070:8080"
+    environment:
+      MONGO_HOST: "data-mongodb"
+      MONGO_PORT: 27017
+      MONGO_USER: ${MONGO_USER}
+      MONGO_PASS: ${MONGO_PASS}
+      MONGO_DB: "datadb"
+      MONGO_COLLECTION_METADATA: "metadata"
+      MONGO_COLLECTION_REPORTS_POLICY: "reports_policy"
+      MONGO_COLLECTION_REPORTS_NET: "reports_net"
+      MONGO_COLLECTION_IMAGES: "images"
+    networks:
+      - frontend
+      - backend
+    volumes:
+      - ./data/data:/workdir/data/:rw
+    depends_on:
+      data-mongodb:
+        condition: service_healthy
+
+  data-mongodb:
+    image: "mongo:8.2-noble"
+    restart: unless-stopped
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASS}
+      MONGO_INITDB_DATABASE: "datadb"
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --eval 'db.adminCommand({ ping: 1 }).ok' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    volumes:
+      - ./data/data/db:/data/db:rw
+      - data-mongo-config:/data/configdb:rw
+
+  ## ----------- Viewers -----------
+
+  mongo-express:
+    image: "mongo-express:1.0.2-18"
+    restart: unless-stopped
+    ports:
+      - "8090:8081"
+    environment:
+      ME_CONFIG_MONGODB_ADMINUSERNAME: ${MONGO_USER}
+      ME_CONFIG_MONGODB_ADMINPASSWORD: ${MONGO_PASS}
+      ME_CONFIG_MONGODB_SERVER: "users-mongodb"
+      ME_CONFIG_BASICAUTH_USERNAME: "${MONGO_BASICAUTH_USER}"
+      ME_CONFIG_BASICAUTH_PASSWORD: "${MONGO_BASICAUTH_PASSWORD}"
+    networks:
+      - frontend
+      - backend
+    depends_on:
+      users-mongodb:
+        condition: service_healthy
+
+  data-mongo-express:
+    image: "mongo-express:1.0.2-18"
+    restart: unless-stopped
+    ports:
+      - "8091:8081"
+    environment:
+      ME_CONFIG_MONGODB_ADMINUSERNAME: ${MONGO_USER}
+      ME_CONFIG_MONGODB_ADMINPASSWORD: ${MONGO_PASS}
+      ME_CONFIG_MONGODB_SERVER: "data-mongodb"
+      ME_CONFIG_BASICAUTH_USERNAME: "${MONGO_BASICAUTH_USER}"
+      ME_CONFIG_BASICAUTH_PASSWORD: "${MONGO_BASICAUTH_PASSWORD}"
+    networks:
+      - frontend
+      - backend
+    depends_on:
+      data-mongodb:
+        condition: service_healthy
+
+  dbgate:
+    image: dbgate/dbgate:latest
+    restart: unless-stopped
+    environment:
+      LOGIN: "${MONGO_BASICAUTH_USER}"
+      PASSWORD: "${MONGO_BASICAUTH_PASSWORD}"
+    ports:
+      - "8092:3000"
+    networks:
+      - frontend
+      - backend
+    depends_on:
+      data-mongodb:
+        condition: service_healthy
+
+  ## ----------- Analysis Services -----------
+
+  analysis_policy:
+    build: ./analysis_policy/.
+    restart: unless-stopped
+    environment:
+      DATA_SERVICE: "data:8080"
+    ports:
+      - "4050:8080"
+    networks:
+      - backend
+    volumes:
+      - ./analysis_policy/data/model_cache:/root/.cache/huggingface/hub
+    depends_on:
+      data-mongodb:
+        condition: service_healthy
+
+  analysis_net:
+    build: ./analysis_net/.
+    restart: unless-stopped
+    environment:
+      DATA_SERVICE: "data:8080"
+      IPINFO_TOKEN: ${IPINFO_TOKEN}
+    ports:
+      - "4060:8080"
+    networks:
+      - backend
+    volumes:
+      - ./analysis_net/data:/workdir/data
+    depends_on:
+      data-mongodb:
+        condition: service_healthy
+
+  analysis_firmware:
+    build: ./analysis_firmware/.
+    restart: unless-stopped
+    environment:
+      DATA_SERVICE: "data:8080"
+      ONEKEY_API_URL: "${ONEKEY_API_URL}"
+      ONEKEY_API_TOKEN: "${ONEKEY_API_TOKEN}"
+    ports:
+      - "4080:8080"
+    networks:
+      - backend
+    depends_on:
+      data-mongodb:
+        condition: service_healthy
+    
+
+## ----------- Networks -----------
+
+networks:
+  frontend:
+    driver: bridge
+  backend:
+    driver: bridge
+
+## ----------- Volumes -----------
+
+volumes:
+  users-mongo-config:
+  data-mongo-config:
+

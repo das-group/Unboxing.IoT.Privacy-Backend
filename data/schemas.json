@@ -1,0 +1,11 @@
+{
+    "DeviceCategories": [
+        "Garden",
+        "Household",
+        "Industrial",
+        "Office",
+        "Security",
+        "Utility",
+        "Health"
+    ]
+}

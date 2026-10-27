@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Flask Passkey Demo</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            padding: 2em;
+            background: #f5f5f5;
+        }
+
+        input {
+            padding: 0.5em;
+            margin: 0.5em;
+        }
+
+        button {
+            padding: 0.5em 1em;
+            margin: 0.5em;
+        }
+
+        #status {
+            margin-top: 1em;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>🔐 Flask WebAuthn Passkey Demo</h1>
+    <input id="username" placeholder="Username" />
+    <input id="email" placeholder="Email" />
+    <button onclick="registerUser()">Register</button>
+    <button onclick="loginUser()">Login</button>
+    <div>-------------------------------</div>
+    <input id="username_password" placeholder="Username" />
+    <input id="email_password" placeholder="Email" />
+    <input id="password" placeholder="Password" />
+    <button onclick="registerUserPassword()">Register</button>
+    <button onclick="loginUserPassword()">Login</button>
+    <div>-------------------------------</div>
+    <div id="status"></div>
+
+
+    <script>
+
+        const REGISTER_WEBAUTHN_OPTS = "/register/webauthn/options";
+        const REGISTER_WEBAUTHN_VERIFY = "/register/webauthn/verify";
+        const LOGIN_WEBAUTHN_OPTS = "/login/webauthn/options";
+        const LOGIN_WEBAUTHN_VERIFY = "/login/webauthn/verify";
+
+        function toBase64Url(buffer) {
+            return btoa(String.fromCharCode(...new Uint8Array(buffer)))
+                .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+        }
+
+        function fromBase64Url(base64url) {
+            const base64 = base64url.replace(/-/g, "+").replace(/_/g, "/");
+            const pad = base64.length % 4 === 0 ? "" : "=".repeat(4 - (base64.length % 4));
+            const str = atob(base64 + pad);
+            return Uint8Array.from(str, c => c.charCodeAt(0));
+        }
+
+        async function registerUser() {
+            // Get user input
+            const username = document.getElementById("username").value;
+            const email = document.getElementById("email").value;
+
+            // Start registration  ; Send username and email to server to get registration options
+            const resp_opts = await fetch(REGISTER_WEBAUTHN_OPTS, {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ username, email })
+            });
+            if (resp_opts.status !== 200) {
+                const err = await resp_opts.json();
+                document.getElementById("status").innerText = "❌ " + err.error;
+                return;
+            }
+
+            const options = await resp_opts.json();
+
+            // Create credentials
+            const cred = await navigator.credentials.create({
+                publicKey: {
+                    challenge: fromBase64Url(options.challenge),
+                    rp: {
+                        id: options.rp.id,
+                        name: options.rp.name
+                    },
+                    user: {
+                        id: fromBase64Url(options.user.id),
+                        name: options.user.name,
+                        displayName: options.user.displayName
+                    },
+                    pubKeyCredParams: options.pubKeyCredParams,
+                    timeout: options.timeout,
+                    attestation: options.attestation,
+                    authenticatorSelection: {
+                        residentKey: "required",
+                        requireResidentKey: true,
+                        userVerification: "required"
+                    },
+                }
+            });
+
+            // Send credentials to server for verification
+            const resp_verify = await fetch(REGISTER_WEBAUTHN_VERIFY, {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    id: cred.id,
+                    rawId: toBase64Url(cred.rawId),
+                    type: cred.type,
+                    client_data_json: toBase64Url(cred.response.clientDataJSON),
+                    attestation_object: toBase64Url(cred.response.attestationObject),
+                    user_id: options.user.id,
+                })
+            });
+            if (resp_verify.status !== 200) {
+                const err = await resp_verify.json();
+                document.getElementById("status").innerText = "❌ " + err.error;
+                return;
+            }
+
+            // Update UI
+            document.getElementById("status").innerText = "✅ Registered!";
+        }
+
+        async function loginUser() {
+            // Get user input
+            const username = document.getElementById("username").value;
+
+            // Start login ; Send username to server to get login options
+            const resp = await fetch(LOGIN_WEBAUTHN_OPTS, {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ username })
+            });
+            if (resp.status !== 200) {
+                document.getElementById("status").innerText = "❌ User not found!";
+                return;
+            }
+            const options = await resp.json();
+
+            // Get Credentials
+            const cred = await navigator.credentials.get({
+                publicKey: {
+                    challenge: fromBase64Url(options.challenge),
+                    rpId: options.rpId,
+                    allowCredentials: options.allowCredentials.map(cred => ({
+                        id: fromBase64Url(cred.id),
+                        type: cred.type,
+                    })),
+                    userVerification: "required",
+                }
+            });
+
+            // Send assertion to server for verification
+            const response = await fetch(LOGIN_WEBAUTHN_VERIFY, {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    id: cred.id,
+                    rawId: toBase64Url(cred.rawId),
+                    type: cred.type,
+                    authenticatorData: toBase64Url(cred.response.authenticatorData),
+                    clientDataJSON: toBase64Url(cred.response.clientDataJSON),
+                    signature: toBase64Url(cred.response.signature),
+                    userHandle: toBase64Url(cred.response.userHandle),
+                    login_id: options.login_id
+                })
+            });
+
+            if (response.status !== 200) {
+                document.getElementById("status").innerText = "❌ Login failed!";
+                return;
+            }
+
+            const result = await response.json();
+            document.getElementById("status").innerText = "✅ Logged in!";
+            console.log(result);
+        }
+
+        async function registerUserPassword(params) {
+            username = document.getElementById("username_password").value;
+            email = document.getElementById("email_password").value;
+            password = document.getElementById("password").value;
+
+            const resp = await fetch("/register/passwd", {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ username, email, password })
+            });
+            if (resp.status !== 200) {
+                const err = await resp.json();
+                document.getElementById("status").innerText = "❌ " + err.error;
+                return;
+            }
+
+            document.getElementById("status").innerText = "✅ Registered with password!";
+            console.log(await resp.json());
+        }
+
+        async function loginUserPassword() {
+            email = document.getElementById("email_password").value;
+            password = document.getElementById("password").value;
+
+            const resp = await fetch("/login/passwd", {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ email, password })
+            });
+            if (resp.status !== 200) {
+                const err = await resp.json();
+                document.getElementById("status").innerText = "❌ " + err.error;
+                return;
+            }
+
+            document.getElementById("status").innerText = "✅ Logged in with password!";
+            console.log(await resp.json());
+        }
+
+    </script>
+</body>
+
+</html>
